@@ -1,40 +1,59 @@
-// backend/server.js
 const WebSocket = require('ws');
-const os = require('os');
+const si = require('systeminformation');
 
-// Create a WebSocket server
+// Created a WebSocket server
 const wss = new WebSocket.Server({ port: 8080 });
 
-// Function to get system metrics with a timestamp
-const getSystemMetrics = () => {
-    return {
-        timestamp: new Date().toISOString(),
-        cpuUsage: os.loadavg()[0], // Average CPU load over the last minute
-        memoryUsage: Math.round((os.totalmem() - os.freemem()) / os.totalmem() * 100), // Memory usage percentage
-        totalMemory: Math.round(os.totalmem() / (1024 * 1024)), // Total memory in MB
-        freeMemory: Math.round(os.freemem() / (1024 * 1024)), // Free memory in MB
-        uptime: os.uptime(), // System uptime in seconds
-        signalStrength: Math.floor(Math.random() * 101),
-    };
+const getSystemMetrics = async () => {
+  const memInfo = await si.mem();
+  const battery = await si.battery();
+  const cpuData = await si.currentLoad();
+  const diskInfo = await si.fsSize(); 
+
+  // Calculate total and free space across all disks
+  const totalDiskSpace = diskInfo.reduce((acc, disk) => acc + disk.size, 0);
+  const freeDiskSpace = diskInfo.reduce((acc, disk) => acc + disk.available, 0);
+  const usedDiskSpace = totalDiskSpace - freeDiskSpace;
+
+  return {
+    timestamp: new Date().toUTCString(),
+    cpuUsage: Math.round(cpuData.currentLoad), 
+    ram: {
+      used: Math.round((memInfo.used / memInfo.total) * 100), 
+      active: Math.round((memInfo.active / memInfo.total) * 100), 
+      swapUsed: Math.round((memInfo.swapused / memInfo.swaptotal) * 100),
+    },
+    battery: {
+      percentage: battery.percent,
+      isCharging: battery.isCharging,
+      timeRemaining: battery.timeRemaining,
+    },
+    rom: {
+      total: Math.round((totalDiskSpace / (1024 * 1024 * 1024)) * 100) / 100, // Total disk space in GB
+      free: Math.round((freeDiskSpace / (1024 * 1024 * 1024)) * 100) / 100, // Free disk space in GB
+      used: Math.round((usedDiskSpace / (1024 * 1024 * 1024)) * 100) / 100, // Used disk space in GB
+      percentage: Math.round((usedDiskSpace / totalDiskSpace) * 100), // Disk usage percentage
+    },
+  };
 };
 
 // Handle client connections
-wss.on('connection', (ws) => {
-    console.log('Client connected');
-    
-    // Send initial data to the client
-    ws.send(JSON.stringify(getSystemMetrics()));
+wss.on('connection', async (ws) => {
+  console.log('Client connected');
 
-    // Send system metrics every 5 seconds
-    const intervalId = setInterval(() => {
-        ws.send(JSON.stringify(getSystemMetrics()));
-    }, 5000);
+  // Send initial data to the client
+  ws.send(JSON.stringify(await getSystemMetrics()));
 
-    // Handle client disconnection
-    ws.on('close', () => {
-        console.log('Client disconnected');
-        clearInterval(intervalId);
-    });
+  // Send system metrics every second
+  const intervalId = setInterval(async () => {
+    ws.send(JSON.stringify(await getSystemMetrics()));
+  }, 1000);
+
+  // Handle client disconnection
+  ws.on('close', () => {
+    console.log('Client disconnected');
+    clearInterval(intervalId);
+  });
 });
 
 console.log('WebSocket server is running on ws://localhost:8080');
